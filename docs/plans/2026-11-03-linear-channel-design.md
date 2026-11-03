@@ -58,6 +58,7 @@ A nightly contract test in `Teslemetry/tools` CI, still to be built, runs the do
                  <--Triage------  Better Stack incidents (after their alert note)
  Better Stack, GitHub, Twilio --> unchanged alert-router routes, fm-inbox.sh note  ----->  state/inbox
  External agents (Grok, ...) ---> /mcp: send_note, get_status, get_replies         <---->  fm-inbox.sh
+                 <--as the app--  /linear/mcp: ask, progress, report, file         <-----  Firstmate agent (private)
  Linear MCP (as the captain)  <--------------------------------------------------------- Firstmate agent (reads)
 ```
 
@@ -96,12 +97,21 @@ Answers, including a picked option, also reach Firstmate as notes, and Firstmate
 The dock polls `fm-inbox.sh receipts --all-replies` for its `lin-` request ids, the way `alert-router`'s `get_replies` does, and posts each reply to the matching Agent Session as a `response` activity.
 A captain who asks Firstmate something in Linear therefore gets the answer in Linear with no new Firstmate behavior.
 
-### No separate app-identity MCP
+### Firstmate's private Linear tools
 
-An earlier draft gave the Firstmate agent its own MCP tools that act as the Firstmate app, because the Linear MCP acts as the captain and Linear does not notify a user about their own actions.
-That is no longer needed: every write that must notify the captain comes from the dock itself, as the app.
-The mirror raises captain calls and review-ready work from Firstmate's records, the reply relay posts Firstmate's answers into their threads, and the Triage path raises incidents.
-The Firstmate agent therefore needs only the official Linear MCP, mostly for reads.
+The Linear MCP acts as the captain, and Linear does not notify a user about their own actions, so nothing Firstmate writes through it reaches the captain's inbox.
+The mirror and the reply relay already raise everything Firstmate's records say, as the Firstmate app.
+The dock's private MCP server at `/linear/mcp` covers what only Firstmate decides, in its own time, also as the app:
+
+| Tool | Use |
+| --- | --- |
+| `linear_ask` | Ask the captain a question in a task's thread, with one-click options; the thread waits on him, and his answer returns as an ordinary note |
+| `linear_progress` | Replace the task's visible plan, add links such as a PR, and post one update line |
+| `linear_report` | Publish a report as a Linear document on the task's issue |
+| `linear_file` | Open an issue for work Firstmate found, returning the task id to file it under |
+
+None of them can merge, answer a captain call, change a status, or touch the backlog.
+The route answers only callers on the dock's own host that did not come through the proxy, with its own key.
 
 The external `/mcp` endpoint that lets other agents, such as Grok, raise things with Firstmate is unrelated and stays exactly as it was in alert-router: `send_note`, `get_status`, and `get_replies` over the primary's inbox, at `/mcp` and `/mcp/<token>`.
 Its replies are filtered on the `mcp-` request-id prefix and Linear's on `lin-s-`, and each keeps its own cursor, so the two never see each other's answers.
@@ -177,12 +187,12 @@ Either way, the In Review status plus the Review queue view separates the PRs aw
 | Captain-attributed artifacts | Medium: post scout reports as Linear Documents and periodic project status updates | Allowed, since these are records rather than notifications. |
 | Reading Linear Reviews | Medium: `get_diff_threads` shows review comments the captain left in Linear (they also sync to GitHub) | Read only. |
 | Merging from Linear | None | Deny `merge_diff` and `update_diff`; every merge goes through Firstmate's guarded merge command. |
-| Raising calls or replying | None | Leave it to the dock: reply with `fm-inbox.sh reply`, and let the mirror raise calls, because MCP writes appear as the captain and do not notify the captain. |
+| Raising calls or replying | None | Leave it to the dock: reply with `fm-inbox.sh reply`, let the mirror raise calls, and use `/linear/mcp` for questions, progress, reports, and new issues, because Linear MCP writes appear as the captain and do not notify the captain. |
 | Comments and issues | None | Deny `save_comment` and `save_issue`, so nothing Firstmate writes appears as the captain's own words. |
 | Workers | None | Workers get no Linear access; only Firstmate talks to the captain. |
 | Building this | High: set up labels, views, and test issues, and verify mirror output against the live workspace | Use during development. |
 
-The Firstmate agent's harness gets one Linear connection, the official Linear MCP, as the captain and mostly for reads.
+The Firstmate agent's harness gets two Linear connections: the official Linear MCP, as the captain and for reads, and the dock's private `/linear/mcp`, as the Firstmate app.
 
 ## Steering Firstmate without editing `AGENTS.md`
 
@@ -195,18 +205,19 @@ The home's private `data/captain.md` gets this Linear section, which Firstmate l
 - A new Linear request names a `task_id` (for `FM-12`, `fm-12`). File the backlog row under exactly that id so the Linear issue follows the work.
 - Answer every `lin-s-` note with `fm-inbox.sh reply <note id>`. The dock posts the reply into that Linear thread, so write it as a captain-facing message.
 - Do not raise captain calls or review-ready work in Linear yourself. The dock mirrors held tasks and recorded PRs; keep holds and PR records accurate.
+- Use the `firstmate-linear` tools to speak in Linear as Firstmate: `linear_ask` for a question back to the captain (such as which project a request is for), `linear_progress` at real milestones, `linear_report` for scout findings, and `linear_file` before filing work you found yourself, naming the row with the task id it returns.
 - A captain's reply on a Captain's Call is the answer: record it with `fm-captain-hold.sh answer`. Picking Merge on a review question is the captain's explicit merge word for that PR.
 - A stop request or a cancel means interrupt or exit the worker through `bin/fm-control.sh`. Never clean up unfinished work without asking.
 - For a Better Stack Triage note, investigate and reply with findings and a recommendation. Start no fix until the captain accepts and delegates the issue.
-- Use the Linear MCP to read issues, comments, images, and documents. Never use it to comment, create or edit issues, or merge.
+- Use the Linear MCP to read issues, comments, images, and documents. Never use it to comment, create or edit issues, or merge; those writes would appear as the captain's own.
 ```
 
 ## Rollout
 
-1. **Built:** the dock with every alert-router route, the Linear webhook and install, the reply relay, the mirror, and Better Stack incidents in Triage, with unit and end-to-end tests in CI.
+1. **Built:** the dock with every alert-router route, the Linear webhook and install, the reply relay, the mirror, Firstmate's private Linear tools, and Better Stack incidents in Triage, with unit and end-to-end tests in CI.
 2. **Workspace and app:** the captain creates the Firstmate team with Triage on and a Captain's Call status, then the Firstmate OAuth app as `dock/README.md` describes, with access to the Firstmate team only.
 3. **Cutover:** move `fm.ba.id.au` and the ClickStack docker relay to the dock together, stop alert-router, and verify with a Better Stack test incident, a GitHub redelivery, and a test delegation.
-4. **Steering:** add the `data/captain.md` section above.
+4. **Steering:** add the `data/captain.md` section above, and connect the Firstmate session to `/linear/mcp` with its key.
 5. **Still to build:** the missed-event catch-up and the nightly contract test against upstream Firstmate `main`.
 
 Rollback is the reverse of the cutover; stopping the dock returns Firstmate to exactly its current behavior.
