@@ -59,7 +59,7 @@ Upstreaming `tasks-axi list --json` (its issues 33 and 55) would remove the mark
   mentionable)                                       fm-captain-hold.sh answers               ----->  captain-held rows
                      <--activities---                fm-inbox.sh receipts (replies)           <-----  fm-inbox.sh reply
                                                      /mcp: app-identity tools                 <-----  Firstmate agent
-                     <--issue sync---   linear-mirror  reads backlogs and pr= records         <-----  backlog, state/*.meta
+                     <--issue sync---   dock mirror loop  reads backlogs and pr= records      <-----  backlog, state/*.meta
  Linear MCP (as the captain)  <------------------------------------------------------------- Firstmate agent (reads)
 ```
 
@@ -89,8 +89,8 @@ Event handling:
 | Any event whose actor is not the captain's Linear user | Dropped, or noted as `EXTERNAL <actor>:` text when it touches a Firstmate issue, the same convention `alert-router` uses for GitHub. |
 | Any event whose actor is the Firstmate app itself | Dropped, so Firstmate's own writes never echo back. |
 
-A delegated issue becomes a queued row before Firstmate is woken: the dock runs `fm-tasks-axi.sh add eng-123 "<title>" --repo <repo> --body "Linear: <url>"`, which is what the captain would do by hand.
-The task id is the lowercased Linear identifier, so a ship branch such as `fm/eng-123` makes Linear's GitHub integration link the PR to the issue automatically.
+A delegated issue becomes a queued row before Firstmate is woken: the dock runs `fm-tasks-axi.sh add fm-123 "<title>" --repo <repo> --body "Linear: <url>"`, which is what the captain would do by hand.
+The task id is the lowercased Linear identifier, so a ship branch such as `fm/fm-123` makes Linear's GitHub integration link the PR to the issue automatically.
 The row add and the note are both keyed and idempotent, so a webhook retry replays rather than duplicates.
 The note body follows `alert-router`'s style: a short plain-text summary with the issue URL, the captain's description verbatim, and the delivery id, never the raw payload.
 
@@ -118,10 +118,11 @@ Its MCP server gives the Firstmate agent a few narrow tools, all executed with t
 None of them can merge, close a captain call, or edit the backlog; those stay with Firstmate's own guarded commands.
 A CLI wrapper over the same code serves scripts and harnesses without MCP support.
 
-### `linear-mirror/`: raising things from structured state
+### The mirror loop: raising things from structured state
 
-`linear-mirror/` is the Linear sibling of `backlog-mirror/`, reusing its parser and its rules (the backlog is the truth, key on the id alone, conflicts are reported and not written, divergence is shown and not resolved).
-It runs every minute under a systemd timer and projects each home's structured state onto Linear:
+The mirror is a loop inside the dock rather than a separate tool, because it needs the same app token and the same Linear client.
+It is the Linear sibling of `backlog-mirror/`, reusing its parser and its rules (the backlog is the truth, key on the id alone, conflicts are reported and not written, divergence is shown and not resolved).
+It runs on every change to a watched backlog or task record, with a one-minute fallback sweep, and projects each home's structured state onto Linear:
 
 | Firstmate state | Linear projection |
 | --- | --- |
@@ -142,16 +143,15 @@ The mirror's run also performs a bounded catch-up query for issues and Agent Ses
 
 ## Linear workspace shape
 
-The workspace has one human member (the captain) and two installed apps (Cyrus and Codex), so the trust rule is exact: only events whose actor is the captain's Linear user are the captain's word.
-Everything else - other apps, GitHub-synced or Slack-synced comments, Asks or email intake, and anything from the Support team - is untrusted text.
+The workspace is rebuilt for this design with one human member (the captain) and Firstmate as its only agent, so the trust rule is exact: only events whose actor is the captain's Linear user are the captain's word.
+Everything else - GitHub-synced or Slack-synced comments, Asks or email intake, and any future app - is untrusted text.
 
-- **Team:** Firstmate works in the existing Engineering team (`ENG`) rather than a separate team, so the captain's real backlog and Firstmate's backlog are one list; the dock ignores other teams.
+- **Team:** a dedicated `Firstmate` team (key `FM`) holds all Firstmate work, and the app is installed with access to that team only, so Linear itself keeps Firstmate out of every other team and the captain can use them freely; the dock still drops any event from another team as a cheap second check.
 - **Repository:** resolved per issue from the Firstmate project registry, with Linear's `issueRepositorySuggestions` query and an `repo:<name>` label as hints, and one `select` elicitation when it is genuinely ambiguous.
-- **Statuses:** Engineering already has Triage, Backlog, Todo, In Progress, In Review, Done, Canceled, and Duplicate; add one started-type status, Captain's Call.
+- **Statuses:** Triage, Backlog, Todo, In Progress, Captain's Call (started type), In Review, Done, and Canceled.
 - **Labels:** `fm:scout` (deliverable is a report), `mode:direct-PR` / `mode:local-only` / `mode:no-mistakes`, and `yolo:on` / `yolo:off` as explicit per-task captain instructions.
 - **Views:** Captain's Call (assigned to me, Captain's Call) and Review queue (assigned to me, In Review).
-- **Git automations:** turn off "PR merged moves the issue to Done" for Engineering, because Firstmate's cleanup marks work done only after it has proved the work landed.
-- **Other agents:** Cyrus and Codex can also be delegated issues; delegating one issue to two agents would start two independent efforts, so Firstmate treats an issue delegated elsewhere as not its own.
+- **Git automations:** turn off "PR merged moves the issue to Done" for the Firstmate team, because Firstmate's cleanup marks work done only after it has proved the work landed.
 - **Guidance:** Linear's workspace and team agent guidance appears in every session's `promptContext`; it is a good place for captain-written conventions such as label meanings.
 
 ## The captain's Linear workflow
@@ -198,7 +198,7 @@ The home's private `data/captain.md` gets a short Linear section, which Firstmat
 1. **Workspace and app:** the captain creates the Firstmate OAuth app (webhooks on, Agent session events, Inbox notifications, Permission changes, and Issue, Comment, and Attachment data changes) and adds the Captain's Call status; labels and views can be created through the Linear MCP.
 2. **Dock:** copy `alert-router` to `dock/`, add the Linear routes and the OAuth install, deploy under pm2, and confirm a test delegation is acknowledged within 10 seconds and filed as a row and a note.
 3. **Replies:** add the receipts poll so answers to Linear requests appear in their threads.
-4. **Mirror:** start `linear-mirror` in dry-run mode against the live backlogs, then apply.
+4. **Mirror:** start the dock's mirror loop in dry-run mode against the live backlogs, then apply.
 5. **Captain calls and reviews:** add the `/mcp` tools and the select-answer pipe, and add the `data/captain.md` section.
 6. **Contract test:** add the nightly CI job that runs the dock and mirror against upstream Firstmate `main`.
 
@@ -212,7 +212,5 @@ That work belongs upstream, in tasks-axi and in any small Firstmate fixes the ad
 
 ## Open questions
 
-- **Captain's Call as a status or a label:** a status gives a clean column and view; a label avoids changing the Engineering workflow.
 - **Direct answer pipe:** feeding `fm-captain-hold.sh answers` from the dock is the documented channel path, while `decision-desk` deliberately left answer recording to Firstmate; this design pipes only `select` answers, whose keys are exact, and leaves free-text answers to Firstmate.
-- **Cyrus:** whether to keep it installed alongside Firstmate or uninstall it so there is one agent to delegate to.
 - **Concurrent backlog writes:** the dock's `fm-tasks-axi.sh add` must be confirmed safe while Firstmate is also writing the backlog, or the add moves into Firstmate's intake and the dock only notes.
