@@ -204,11 +204,39 @@ The home's private `data/captain.md` gets a short Linear section, which Firstmat
 
 Each step is independent and reversible: stopping the pm2 app and the timer returns Firstmate to exactly its current behavior.
 
-## Later: Linear as the backlog itself
+## Alternative: Linear as the backlog itself
 
-If the overlay proves out, the step from projection to source of truth is a Linear adapter in tasks-axi, which Firstmate already supports for Beads through `.tasks.toml` `backend = ...`.
-It would map tasks-axi verbs to Linear operations, store machine fields in one `firstmate://task/<id>` attachment, and import the markdown backlog with the existing `migrated from data/backlog.md id <legacy id>` marker.
-That work belongs upstream, in tasks-axi and in any small Firstmate fixes the adapter exposes, so it should be proposed there rather than carried as a local patch.
+Instead of mirroring, Firstmate can read and write Linear directly by selecting a Linear tasks-axi adapter through `.tasks.toml` `backend = "linear"`, the same seam Beads uses.
+The dock is still required either way, because only it can receive webhooks and acknowledge Agent Sessions in time; the native option replaces only the mirror loop.
+
+### What native needs
+
+1. **A Linear adapter in tasks-axi** implementing every verb Firstmate uses (`add`, `show`, `list`, `ready`, `start`, `done` with evidence, `hold --until`, `unhold`, `update --archive-body`, multi-id `mv`, `rm`, `public-followup`) and passing the compatibility probe in `bin/fm-tasks-axi-lib.sh`, with machine fields in one `firstmate://task/<id>` attachment per issue.
+2. **Firstmate fixes for readers that bypass tasks-axi.** Lifecycle transitions already handle non-markdown adapters, but several readers open `data/backlog.md` directly: the session-start digest listing, `bin/fm-fleet-snapshot.sh` (Bearings and heartbeats), `bin/fm-inbox.sh status`, `bin/fm-backlog-handoff.sh`, `bin/fm-backlog-receive.sh`, and `bin/fm-afk-return.sh`. On a Linear backend those would report an empty or absent backlog, which the startup contract treats as a registry to rebuild, so they must route through tasks-axi first.
+3. **A migration** of the markdown backlog and Done archive, using the existing `migrated from data/backlog.md id <legacy id>` marker.
+4. Optionally, **instruction changes** so Firstmate drives Agent Sessions itself; the `data/captain.md` section covers this without editing `AGENTS.md`.
+
+### Comparison
+
+| | Mirror (overlay) | Native (Linear backend) |
+| --- | --- | --- |
+| Firstmate code changed | None | About six backlog readers, plus a tasks-axi adapter |
+| Upstream updates | Fast-forward unchanged | Blocked by any local patch until upstreamed; the readers fix is generic (it also fixes Beads) and is a good upstream contribution, the adapter belongs in tasks-axi |
+| Source of truth | Markdown; Linear is a projection seconds behind | Linear, with no second copy and no divergence |
+| Captain edits in Linear | Captain-owned fields reach Firstmate through dock notes; Firstmate-owned fields are flagged as divergence, not written back | Every edit is the real record immediately, including priority, relations, and status |
+| Linear or network outage | Firstmate keeps working; Linear catches up afterwards | Dispatch, cleanup, and captain holds stop, because backlog writes refuse rather than guess |
+| Latency and limits | Local file speed; Linear rate limits touch only the mirror | Every backlog read and write is an API call, including the session-start digest |
+| Integrity guards | tasks-axi atomic file writes and the existing lock model | Must be rebuilt in the adapter with optimistic concurrency against concurrent captain edits |
+| Testing | Contract test against upstream `main` | Firstmate's own test suite assumes markdown; the adapter needs its own suite plus a Firstmate run on a Linear backend |
+| Rollback | Stop the dock's mirror loop | Migrate back to markdown |
+| Build size | Dock plus a mirror loop | Dock plus a full adapter, the readers fix, and migration |
+| Secondmates | Each home mirrors independently | Every home must run the Linear backend, with homes separated by label |
+
+### Recommendation
+
+Build the dock first, because both options need it and it delivers the whole inbound half on its own.
+Use the mirror loop to get the outbound half working with no Firstmate changes.
+In parallel, offer upstream the generic fix that routes every backlog reader through tasks-axi; once that lands, a Linear tasks-axi adapter makes native a configuration switch rather than a fork, and the mirror loop is retired.
 
 ## Open questions
 
